@@ -1,0 +1,346 @@
+import com.typesafe.config.Config
+import com.typesafe.config.ConfigFactory
+group 'com.pr'
+version '1.0'
+
+buildscript {//properties that you need to build the project
+    Properties constants = new Properties()
+    file("$projectDir/./constants.properties").withInputStream { constants.load(it) }
+
+    ext {
+        corda_release_group = constants.getProperty("cordaReleaseGroup")
+        corda_core_release_group =  constants.getProperty("cordaCoreReleaseGroup")
+        corda_release_version = constants.getProperty("cordaVersion")
+        corda_core_release_version = constants.getProperty("cordaCoreVersion")
+        corda_gradle_plugins_version = constants.getProperty("gradlePluginsVersion")
+        kotlin_version = constants.getProperty("kotlinVersion")
+        junit_version = constants.getProperty("junitVersion")
+        quasar_version = constants.getProperty("quasarVersion")
+        log4j_version = constants.getProperty("log4jVersion")
+        slf4j_version = constants.getProperty("slf4jVersion")
+        corda_platform_version = constants.getProperty("platformVersion").toInteger()
+        //springboot
+        spring_boot_version = '2.0.2.RELEASE'
+        spring_boot_gradle_plugin_version = '2.0.2.RELEASE'
+        //token
+        tokens_release_group = 'com.r3.corda.lib.tokens'
+        tokens_release_version = '1.2'
+        
+    }
+
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        maven { url 'https://software.r3.com/artifactory/corda-releases' }
+        maven { url 'https://ci-artifactory.corda.r3cev.com/artifactory/corda-releases' }
+    }
+
+    dependencies {
+        classpath "net.corda.plugins:cordapp:$corda_gradle_plugins_version"
+        classpath "net.corda.plugins:cordformation:$corda_gradle_plugins_version"
+        classpath "net.corda.plugins:quasar-utils:$corda_gradle_plugins_version"
+        classpath "org.springframework.boot:spring-boot-gradle-plugin:$spring_boot_gradle_plugin_version"
+    }
+    
+}
+
+
+allprojects {//Properties that you need to compile your project (The application)
+    apply from: "${rootProject.projectDir}/repositories.gradle"
+    apply plugin: 'java'
+
+    repositories {
+        mavenLocal()
+        mavenCentral()
+        maven { url 'https://software.r3.com/artifactory/corda' }
+        maven { url 'https://software.r3.com/artifactory/corda-lib' }
+        maven { url 'https://ci-artifactory.corda.r3cev.com/artifactory/corda-lib' }
+        maven { url 'https://jitpack.io' }
+    }
+
+    apply plugin: 'java'
+    sourceCompatibility = 1.8
+    apply plugin: 'net.corda.plugins.cordformation'
+    apply plugin: 'net.corda.plugins.quasar-utils'
+    apply plugin: 'net.corda.plugins.cordapp'
+
+
+    tasks.withType(JavaCompile) {
+        options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation" << "-Xlint:-options" << "-parameters" // Required by Corda's serialisation framework.
+    }
+
+
+    jar {
+        // This makes the JAR's SHA-256 hash repeatable.
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    }
+    configurations {
+    all {
+        resolutionStrategy {
+            eachDependency { DependencyResolveDetails details ->
+                def exclusions = ['corda-finance']
+                if (details.requested.group == "co.paralleluniverse"  && !exclusions.contains(details.requested.name)) {
+                    details.useTarget group: "co.paralleluniverse", name: details.requested.name, version: quasar_version
+                }
+                if (details.requested.group == "net.corda"  && !exclusions.contains(details.requested.name)) {
+                    details.useTarget group: "net.corda", name: details.requested.name, version: corda_release_version
+                }
+            }
+        }
+    }
+}
+    
+}
+
+apply plugin: 'net.corda.plugins.cordapp'
+apply plugin: 'net.corda.plugins.cordformation'
+apply plugin: 'net.corda.plugins.quasar-utils'
+
+cordapp {
+    info {
+        name "PR-CorDapp"
+        vendor "Corda Open Source"
+        targetPlatformVersion corda_platform_version.toInteger()
+        minimumPlatformVersion corda_platform_version.toInteger()
+    }
+}
+
+sourceSets {
+    main {
+        resources {
+            srcDir rootProject.file("config/dev")
+        }
+    }
+}
+//Module dependencis
+dependencies {
+    // Corda dependencies.
+    cordaCompile "$corda_core_release_group:corda-core:$corda_core_release_version"
+    cordaCompile "$corda_release_group:corda-node-api:$corda_release_version"
+    cordaRuntime "net.corda:corda-shell:4.9"
+
+
+    cordaCompile "org.apache.logging.log4j:log4j-slf4j-impl:${log4j_version}"
+    cordaCompile "org.apache.logging.log4j:log4j-web:${log4j_version}"
+    cordaCompile "org.slf4j:jul-to-slf4j:$slf4j_version"
+    cordaDriver "net.corda:corda-shell:4.9"
+
+    cordapp "$tokens_release_group:tokens-contracts:$tokens_release_version"
+    cordapp "$tokens_release_group:tokens-workflows:$tokens_release_version"
+
+}
+
+
+dependencies {
+    // CorDapp dependencies.
+    cordapp project(":pr-common")
+    cordapp project(":pr-contract-state-schema")
+    cordapp project(":pr-student-contract-state-schema")
+    cordapp project(":pr-consultant")
+    cordapp project(":pr-university")
+    cordapp project(":pr-wes")
+    cordapp "$corda_release_group:corda-finance:3.3-corda"
+    cordapp project(":workflows")
+    cordapp project(":contracts")
+}
+
+
+
+
+//Task to deploy the nodes in order to bootstrap a network
+task deployNodes(type: net.corda.plugins.Cordform, dependsOn: ['jar']) {
+
+    directory "./build/nodes"
+
+    nodeDefaults{
+        cordapp project(":workflows")
+        cordapp project(":contracts")
+
+
+
+         runSchemaMigration = true
+         // Token SDK dependencies.
+
+        cordapp "$tokens_release_group:tokens-contracts:$tokens_release_version"    
+        cordapp "$tokens_release_group:tokens-workflows:$tokens_release_version"
+    }
+
+    node {
+        name "O=Notary,L=London,C=GB"
+        notary = [validating : false]
+        p2pPort 10002
+        rpcSettings {
+            address("localhost:10003")
+            adminAddress("localhost:10043")
+        }
+        extraConfig = ['h2Settings.address' : 'localhost:12347']
+        rpcUsers = [[user: "user1", "password": "test", "permissions": ["ALL"]]]
+    }
+    node {
+        name "O=Consultants,L=London,C=GB"
+        p2pPort 10005
+        rpcSettings {
+            address("localhost:10006")
+            adminAddress("localhost:10046")
+        }
+        cordapps = [
+                "com.pr.consultant:pr-consultant:$version",
+                "com.pr.common:pr-common:$version",
+                "com.pr.contract.state.schema:pr-contract-state-schema:$version",
+                "com.pr.student.contract.state.schema:pr-student-contract-state-schema:$version"
+        ]
+
+        cordapps = ["net.corda:corda-finance:3.3-corda"]
+
+        rpcUsers = [[ user: "user1", "password": "test", "permissions": ["ALL"]]]
+        extraConfig = ['h2Settings.address' : 'localhost:12346']
+    }
+    node {
+        name "O=University,L=New York,C=US"
+        p2pPort 10008
+        rpcSettings {
+            address("localhost:10009")
+            adminAddress("localhost:10049")
+        }
+
+        cordapps = [
+                "com.pr.university:pr-university:$version",
+                "com.pr.common:pr-common:$version",
+                "com.pr.student.contract.state.schema:pr-student-contract-state-schema:$version"
+        ]
+
+        cordapps = ["net.corda:corda-finance:3.3-corda"]
+
+        rpcUsers = [[ user: "user1", "password": "test", "permissions": ["ALL"]]]
+        extraConfig = ['h2Settings.address' : 'localhost:12345']
+    }
+    node {
+        name "O=Wes,L=London,C=GB"
+        p2pPort 10011
+        rpcSettings {
+            address("localhost:10012")
+            adminAddress("localhost:10052")
+        }
+
+
+        cordapps = [
+                "com.pr.wes:pr-wes:$version",
+                "com.pr.common:pr-common:$version",
+                "com.pr.contract.state.schema:pr-contract-state-schema:$version",
+                "com.pr.student.contract.state.schema:pr-student-contract-state-schema:$version"
+        ]
+
+        cordapps = ["net.corda:corda-finance:3.3-corda"]
+
+        rpcUsers = [[ user: "user1", "password": "test", "permissions": ["ALL"]]]
+        extraConfig = ['h2Settings.address' : 'localhost:12344']
+    }
+}
+
+task installQuasar(type: Copy) {
+    destinationDir rootProject.file("lib")
+    from(configurations.quasar) {
+        rename 'quasar-core(.*).jar', 'quasar.jar'
+    }
+}
+
+enum OS {
+    MAC,
+    WIN,
+    LINUX
+}
+
+OS getOSName() {
+    def osName = System.getProperty("os.name", "generic").toLowerCase(Locale.ENGLISH)
+    if (osName.contains("mac") || osName.contains("darwin")) {
+        return OS.MAC
+    } else if (osName.contains("win")) {
+        return OS.WIN
+    } else return OS.LINUX
+}
+
+boolean isTmux() {
+    System.getenv("TMUX") == null ? false : true
+}
+/* This task can made more clean and generic or customized as per requirement, though conveys the idea of reading the node.conf file and it's custom properties
+Usage: gradle createServer -Penv=dev || gradle createServer -Penv=prod
+*/
+
+task createServer(dependsOn: [':pr-consultant-server:bootJar',':pr-university-server:bootJar',':pr-wes-server:bootJar']) {
+    doLast {
+        int serverPort = 8081 // initial server port
+        println 'Started create server task'
+        def hasEnv = project.hasProperty('env')
+        if (!hasEnv) {
+            println "env: dev, selected. intialServer Port is now set to $serverPort"
+        }
+        if (hasEnv && !(env.toLowerCase() in ['dev', 'prod'])) {
+            println "Invalid env: $env, only dev and prod supported!."
+        } else {
+            if (hasEnv && env.toLowerCase() == 'prod') {
+                serverPort = 5050
+                println "env: $env, selected. intialServer Port is now set to $serverPort ."
+            }
+            OS os = getOSName()
+            println "Operating System $os"
+            def rootBuildFolder = "./build/nodes/"
+            def starterBatFile = new File(rootBuildFolder + "runserver.bat")
+            def starterShFile = new File(rootBuildFolder + "runserver.sh")
+            if (starterBatFile.exists() || starterShFile.exists()) {
+                starterBatFile.delete()
+                starterShFile.delete()
+            }
+            String regx = "[^A-Za-z0-9]"
+            def winCMD = "start "
+            def linux = "x-terminal-emulator -e "
+            def linuxTmux = "tmux new-window -n "
+            def macStart = "osascript -e 'tell app \"Terminal\" to do script \""
+            def macEnd = "\"'"
+            def newLine = System.getProperty("line.separator")
+            new File(rootBuildFolder).listFiles().sort { it.name }.each { File dir ->
+                if (dir.isDirectory() && !dir.getName().find(regx) && !(dir.getName().toLowerCase() in ["notary", "web-logs", "oracle"])) {
+
+                    Config config = ConfigFactory.parseFile(new File(dir.getPath() + "/node.conf"))
+                    def rpcAddress = config.getString("rpcSettings.address")
+//                    def rpcUsers = (HashMap) config.getAnyRefList("rpcUsers").get(0)
+//                    def password = rpcUsers.get("password")
+//                    def user = rpcUsers.get("user")
+                    String javaCommand = " java -Dnodename=" + dir.getName() +
+                            " -Dconfig.rpc.password=" + "test" +
+                            " -Dconfig.rpc.address=" + rpcAddress +
+                            " -Dmyprocessname=smcdev"+
+                            " -Dconfig.rpc.username=" + "user1" +
+                            " -Dserver.port=" + (serverPort++) +
+                            " -jar " + getJarName(dir.getName())
+                    if (os == OS.WIN) {
+                        starterBatFile.append(winCMD + javaCommand + newLine)
+                        return
+                    }
+                    if (os == OS.MAC) {
+                        starterShFile.append(macStart + javaCommand + macEnd + newLine)
+                        return
+                    }
+                    if (os == OS.LINUX)
+                        if (isTmux()) {
+                            starterShFile.append(linuxTmux + dir.getName()+"-server" + " '" + javaCommand + "'" + newLine)
+                        } else {
+                            starterShFile.append(linux + javaCommand + newLine)
+                        }
+                }
+            }
+            println 'Finished create server task'
+        }
+    }
+}
+
+private String getJarName(String name) {
+    if(name.toLowerCase().contains('consultant'))
+        return project(':pr-consultant-server').jar.outputs.files.getSingleFile()
+    else if(name.toLowerCase().contains('university'))
+        return project(':pr-university-server').jar.outputs.files.getSingleFile()
+    else if(name.toLowerCase().contains('wes'))
+        return project(':pr-wes-server').jar.outputs.files.getSingleFile()
+    else throw TaskExecutionException("Invalid name found")
+}
